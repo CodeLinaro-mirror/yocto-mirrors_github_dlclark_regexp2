@@ -205,6 +205,51 @@ func BenchmarkOnePassLongNotPrefix(b *testing.B) {
 	}
 }
 
+func BenchmarkDisjointAlternationDispatch(b *testing.B) {
+	re := MustCompile(`\A(?:ABCD|CDEF|EFGH|GHIJ|IJKL|KLMN|MNOP|OPQR|QRST|STUV|UVWX|WXYZ)\z`)
+	for _, tt := range []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{"first", "ABCD", true},
+		{"middle", "MNOP", true},
+		{"last", "WXYZ", true},
+		{"miss", "YZZZ", false},
+	} {
+		b.Run(tt.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				if got, err := re.MatchString(tt.input); err != nil || got != tt.want {
+					b.Fatal(got, err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkUnicodeNewlineDispatch(b *testing.B) {
+	re := MustCompile(`\A(?:\R)+\z`)
+	input := strings.Repeat("\r\n\u2028\n", 100)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if got, err := re.MatchString(input); err != nil || !got {
+			b.Fatal(got, err)
+		}
+	}
+}
+
+func BenchmarkDisjointAlternationDispatchLoop(b *testing.B) {
+	re := MustCompile(`\A(?:AX|CY|EZ|GA|IB|KC|MD|OE|QF|SG|UH|WI)+\z`)
+	input := strings.Repeat("WI", 256)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if got, err := re.MatchString(input); err != nil || !got {
+			b.Fatal(got, err)
+		}
+	}
+}
+
 var text []rune
 
 func makeText(n int) []rune {
