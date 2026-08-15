@@ -403,3 +403,71 @@ func TestInterpreterLeadingStrings(t *testing.T) {
 		t.Fatalf("expected match, got %v %v", ok, err)
 	}
 }
+
+func TestRegisteredEngineUnknownLeftContextDoesNotSlice(t *testing.T) {
+	const pattern = `registered-unknown-left-context`
+	RegisterEngine(pattern, RuntimeEngineData{
+		CapSize: 1,
+		StringPrefixFilter: func(input string, startAt int) (int, bool) {
+			return strings.Index(input[startAt:], "foo") + startAt, true
+		},
+		FindFirstChar: func(r *Runner) bool { return true },
+		Execute: func(r *Runner) error {
+			if r.Runtextpos+3 > len(r.Runtext) || string(r.Runtext[r.Runtextpos:r.Runtextpos+3]) != "foo" {
+				return nil
+			}
+			// \b: previous rune must be absent or a non-word character.
+			if r.Runtextpos > 0 && syntax.IsWordChar(r.Runtext[r.Runtextpos-1]) {
+				return nil
+			}
+			r.Capture(0, r.Runtextpos, r.Runtextpos+3)
+			return nil
+		},
+	})
+
+	re := MustCompile(pattern)
+	if d := re.decodeFrom(strings.Repeat("x", 20)+"foo", 20); d != 0 {
+		t.Fatalf("unspecified left context sliced from %d, want 0", d)
+	}
+	ok, err := re.MatchString("xxxfoo")
+	if err != nil {
+		t.Fatalf("MatchString: %v", err)
+	}
+	if ok {
+		t.Fatal("expected no match for \\bfoo against xxxfoo")
+	}
+}
+
+func TestRegisteredEngineKnownLeftContextSlices(t *testing.T) {
+	const pattern = `registered-known-left-context`
+	RegisterEngine(pattern, RuntimeEngineData{
+		CapSize:          1,
+		LeftContextKnown: true,
+		LeftContextRunes: 0,
+		StringPrefixFilter: func(input string, startAt int) (int, bool) {
+			idx := strings.Index(input[startAt:], "needle")
+			if idx < 0 {
+				return 0, false
+			}
+			return startAt + idx, true
+		},
+		FindFirstChar: func(r *Runner) bool { return true },
+		Execute: func(r *Runner) error {
+			if r.Runtextpos+6 > len(r.Runtext) || string(r.Runtext[r.Runtextpos:r.Runtextpos+6]) != "needle" {
+				return nil
+			}
+			r.Capture(0, r.Runtextpos, r.Runtextpos+6)
+			return nil
+		},
+	})
+
+	re := MustCompile(pattern)
+	input := strings.Repeat("x", 100) + "needle"
+	if got := re.decodeFrom(input, 100); got != 100 {
+		t.Fatalf("decodeFrom = %d, want 100", got)
+	}
+	ok, err := re.MatchString(input)
+	if err != nil || !ok {
+		t.Fatalf("MatchString = %v, %v", ok, err)
+	}
+}

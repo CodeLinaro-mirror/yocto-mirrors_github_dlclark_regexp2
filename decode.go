@@ -23,13 +23,21 @@ func (re *Regexp) decodeFrom(s string, startAt int) int {
 	if startAt <= 0 || re.RightToLeft() {
 		return 0
 	}
-	if re.code != nil && re.code.LeftContextRunes < 0 {
+	need := re.decodeLeftContextRunes()
+	if need < 0 {
 		return 0
 	}
-	if re.code != nil && re.code.LeftContextRunes > 0 {
+	if need > 0 {
 		return prevRuneByte(s, startAt)
 	}
 	return startAt
+}
+
+func (re *Regexp) decodeLeftContextRunes() int {
+	if re.code != nil {
+		return re.code.LeftContextRunes
+	}
+	return re.leftContextRunes
 }
 
 // decodeString converts s to []rune for the MatchString startAt<=0 path.

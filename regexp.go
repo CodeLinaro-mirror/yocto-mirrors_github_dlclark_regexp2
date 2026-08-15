@@ -64,6 +64,9 @@ type Regexp struct {
 	executeQuick       func(r *Runner) error
 	stringPrefixFilter StringPrefixFilter
 	quickCode          *syntax.Code // bool-only program with unobservable captures removed
+	// leftContextRunes is used when code is nil (registered engines).
+	// The interpreter reads the same value from code.LeftContextRunes.
+	leftContextRunes int
 }
 
 // Compile parses a regular expression and returns, if successful,

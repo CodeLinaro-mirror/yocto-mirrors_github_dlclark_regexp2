@@ -215,11 +215,11 @@ func (w *writer) codeFromTree(tree *RegexTree) (*Code, error) {
 		Anchors:           getAnchors(tree),
 		RightToLeft:       rtl,
 		FindOptimizations: tree.FindOptimizations,
-		LeftContextRunes:  analyzeLeftContext(tree.Root),
+		LeftContextRunes:  AnalyzeLeftContext(tree.Root),
 	}, nil
 }
 
-// analyzeLeftContext returns how many runes before a candidate start the matcher
+// AnalyzeLeftContext returns how many runes before a candidate start the matcher
 // may inspect. Slicing the input down to that candidate is legal only when no
 // opcode depends on the original search origin or unbounded left text.
 //
@@ -227,7 +227,7 @@ func (w *writer) codeFromTree(tree *RegexTree) (*Code, error) {
 //	 1  one previous rune is enough for \b, or to keep ^/\A from seeing
 //	    the candidate as the original start (they test leftchars()==0)
 //	-1  do not slice: lookbehind, or \G (NtStart), which keys off textstart
-func analyzeLeftContext(n *RegexNode) int {
+func AnalyzeLeftContext(n *RegexNode) int {
 	if n == nil {
 		return 0
 	}
@@ -245,7 +245,7 @@ func analyzeLeftContext(n *RegexNode) int {
 	}
 
 	for _, child := range n.Children {
-		childNeed := analyzeLeftContext(child)
+		childNeed := AnalyzeLeftContext(child)
 		if childNeed < 0 {
 			return -1
 		}
