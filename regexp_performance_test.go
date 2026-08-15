@@ -377,6 +377,67 @@ func BenchmarkMatchStringLeadingSetMiss32K(b *testing.B) {
 	}
 }
 
+func BenchmarkMatchStringLeadingLiteralMiss32K(b *testing.B) {
+	r := MustCompile(`needle`)
+	input := strings.Repeat("z", 32<<10)
+	b.SetBytes(int64(len(input)))
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if ok, err := r.MatchString(input); ok || err != nil {
+			b.Fatal(ok, err)
+		}
+	}
+}
+
+func BenchmarkMatchStringLeadingLiteralLateHit32K(b *testing.B) {
+	r := MustCompile(`needle`)
+	input := strings.Repeat("z", 32<<10) + "needle"
+	b.SetBytes(int64(len(input)))
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if ok, err := r.MatchString(input); !ok || err != nil {
+			b.Fatal(ok, err)
+		}
+	}
+}
+
+func BenchmarkFindStringMatchLeadingLiteralLateHit32K(b *testing.B) {
+	r := MustCompile(`needle`)
+	input := strings.Repeat("z", 32<<10) + "needle"
+	b.SetBytes(int64(len(input)))
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		m, err := r.FindStringMatch(input)
+		if err != nil || m == nil || m.String() != "needle" {
+			b.Fatal(m, err)
+		}
+	}
+}
+
+func BenchmarkMatchStringLeadingStringsMiss32K(b *testing.B) {
+	r := MustCompile(`apple|tiger`)
+	input := strings.Repeat("z", 32<<10)
+	b.SetBytes(int64(len(input)))
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if ok, err := r.MatchString(input); ok || err != nil {
+			b.Fatal(ok, err)
+		}
+	}
+}
+
+func BenchmarkMatchRunesLeadingLiteralMiss32K(b *testing.B) {
+	r := MustCompile(`needle`)
+	input := []rune(strings.Repeat("z", 32<<10))
+	b.SetBytes(int64(len(input)))
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if ok, err := r.MatchRunes(input); ok || err != nil {
+			b.Fatal(ok, err)
+		}
+	}
+}
+
 func BenchmarkMatchRunesLeadingSetMiss32K(b *testing.B) {
 	r := MustCompile(`[a-q]`)
 	input := []rune(strings.Repeat("z", 32<<10))

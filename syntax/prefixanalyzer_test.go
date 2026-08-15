@@ -275,17 +275,29 @@ func TestFindOptimizationsUsesLeadingPositiveLookahead(t *testing.T) {
 }
 
 func TestFindOptimizationsPreferPrefixesForHighFrequencyFirstSet(t *testing.T) {
-	tree, err := Parse(`apple|tiger`, ParseOptions{CodeGen: true})
+	for _, opt := range []ParseOptions{{}, {CodeGen: true}} {
+		tree, err := Parse(`apple|tiger`, opt)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		opts := tree.FindOptimizations
+		if opts.FindMode != LeadingStrings_LeftToRight {
+			t.Fatalf("FindMode = %v, want %v", opts.FindMode, LeadingStrings_LeftToRight)
+		}
+		if want, got := []string{"apple", "tiger"}, opts.LeadingPrefixes; !slices.Equal(want, got) {
+			t.Fatalf("LeadingPrefixes = %#v, want %#v", got, want)
+		}
+	}
+}
+
+func TestFindPrefixesRejectsNegatedSet(t *testing.T) {
+	tree, err := Parse(`a[^bc]d`, ParseOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	opts := tree.FindOptimizations
-	if opts.FindMode != LeadingStrings_LeftToRight {
-		t.Fatalf("FindMode = %v, want %v", opts.FindMode, LeadingStrings_LeftToRight)
-	}
-	if want, got := []string{"apple", "tiger"}, opts.LeadingPrefixes; !slices.Equal(want, got) {
-		t.Fatalf("LeadingPrefixes = %#v, want %#v", got, want)
+	if tree.FindOptimizations.FindMode == LeadingStrings_LeftToRight {
+		t.Fatalf("negated set produced prefixes %#v", tree.FindOptimizations.LeadingPrefixes)
 	}
 }
 

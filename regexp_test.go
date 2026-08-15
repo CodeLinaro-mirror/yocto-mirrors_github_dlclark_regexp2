@@ -238,6 +238,56 @@ func TestCapture_ByteOffsetsRightToLeft(t *testing.T) {
 	assertByteRange(t, "Match", m, 3, 1)
 }
 
+func TestCapture_NamedGroupsAfterSlice(t *testing.T) {
+	re := MustCompile(`(?<left>nee)(?<right>dle)`)
+	prefix := strings.Repeat("漢", 12)
+	input := prefix + "needle-extra"
+	m, err := re.FindStringMatch(input)
+	if err != nil {
+		t.Fatalf("Unexpected match error: %v", err)
+	}
+	if m == nil {
+		t.Fatal("Should have matched")
+	}
+
+	if want, got := 12, m.RuneIndex; want != got {
+		t.Fatalf("Match RuneIndex wanted %v got %v", want, got)
+	}
+	if want, got := "needle", m.String(); want != got {
+		t.Fatalf("Match String wanted %v got %v", want, got)
+	}
+	assertByteRange(t, "Match", m, len(prefix), 6)
+
+	left := m.GroupByName("left")
+	if left == nil {
+		t.Fatal("missing group left")
+	}
+	if want, got := "nee", left.String(); want != got {
+		t.Fatalf("left String wanted %v got %v", want, got)
+	}
+	assertByteRange(t, "left", left, len(prefix), 3)
+
+	right := m.GroupByName("right")
+	if right == nil {
+		t.Fatal("missing group right")
+	}
+	if want, got := "dle", right.String(); want != got {
+		t.Fatalf("right String wanted %v got %v", want, got)
+	}
+	assertByteRange(t, "right", right, len(prefix)+3, 3)
+
+	groups := m.Groups()
+	if want, got := 3, len(groups); want != got {
+		t.Fatalf("Group count wanted %v got %v", want, got)
+	}
+	if want, got := "nee", groups[1].String(); want != got {
+		t.Fatalf("groups[1] wanted %v got %v", want, got)
+	}
+	if want, got := "dle", groups[2].String(); want != got {
+		t.Fatalf("groups[2] wanted %v got %v", want, got)
+	}
+}
+
 func TestCapture_ByteOffsetsRunesInput(t *testing.T) {
 	re := MustCompile(`é漢`)
 	m, err := re.FindRunesMatch([]rune("aé漢"))
@@ -1515,6 +1565,86 @@ func TestAlternationConstruct_Matches(t *testing.T) {
 	}
 	if m != nil {
 		t.Fatal("Did not expect third match")
+	}
+}
+
+func TestGAnchor(t *testing.T) {
+	re := MustCompile(`\Gfoo`)
+
+	t.Run("match at origin", func(t *testing.T) {
+		ok, err := re.MatchString("foo")
+		if err != nil || !ok {
+			t.Fatalf("MatchString(foo) = %v, %v", ok, err)
+		}
+		m, err := re.FindStringMatch("foo")
+		if err != nil || m == nil {
+			t.Fatalf("FindStringMatch(foo) = %v, %v", m, err)
+		}
+		if m.RuneIndex != 0 || m.String() != "foo" {
+			t.Fatalf("got RuneIndex=%d String=%q", m.RuneIndex, m.String())
+		}
+	})
+
+	t.Run("does not match later literal", func(t *testing.T) {
+		for _, input := range []string{"xxfoo", "xxxxfoo", strings.Repeat("x", 100) + "foo"} {
+			ok, err := re.MatchString(input)
+			if err != nil || ok {
+				t.Fatalf("MatchString(%q) = %v, %v", input, ok, err)
+			}
+			m, err := re.FindStringMatch(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if m != nil {
+				t.Fatalf("FindStringMatch(%q) = %q at %d, want no match", input, m.String(), m.RuneIndex)
+			}
+			idxs, err := re.FindAllStringIndex(input, -1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(idxs) != 0 {
+				t.Fatalf("FindAllStringIndex(%q) = %v, want none", input, idxs)
+			}
+		}
+	})
+
+	t.Run("starting at origin of foo", func(t *testing.T) {
+		m, err := re.FindStringMatchStartingAt("xxfoo", 2)
+		if err != nil || m == nil {
+			t.Fatalf("FindStringMatchStartingAt(xxfoo, 2) = %v, %v", m, err)
+		}
+		if m.RuneIndex != 2 || m.String() != "foo" {
+			t.Fatalf("got RuneIndex=%d String=%q", m.RuneIndex, m.String())
+		}
+	})
+
+	t.Run("starting before a later foo", func(t *testing.T) {
+		m, err := re.FindStringMatchStartingAt("xxXfoo", 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m != nil {
+			t.Fatalf("FindStringMatchStartingAt(xxXfoo, 2) = %q at %d, want no match", m.String(), m.RuneIndex)
+		}
+	})
+}
+
+func TestGAnchorFindNextMatch(t *testing.T) {
+	re := MustCompile(`\G\w`)
+	m, err := re.FindStringMatch("ab-c")
+	if err != nil || m == nil || m.String() != "a" {
+		t.Fatalf("first = %v, %v", m, err)
+	}
+	m, err = re.FindNextMatch(m)
+	if err != nil || m == nil || m.RuneIndex != 1 || m.String() != "b" {
+		t.Fatalf("second = %v, %v", m, err)
+	}
+	m, err = re.FindNextMatch(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m != nil {
+		t.Fatalf("third = %q at %d, want no match across '-'", m.String(), m.RuneIndex)
 	}
 }
 

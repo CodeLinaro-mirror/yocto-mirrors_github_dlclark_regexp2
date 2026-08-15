@@ -2,6 +2,7 @@ package regexp2
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -168,5 +169,78 @@ func TestReplace_NestedGroups(t *testing.T) {
 	}
 	if want, got := "17.43  2 16.33  0.98  0.43   43   12  17", res; want != got {
 		t.Fatalf("Wrong result: %s", got)
+	}
+}
+
+func TestReplace_SpecialsUseSliceIndexes(t *testing.T) {
+	re := MustCompile(`needle`)
+	input := strings.Repeat("x", 20) + "needle" + "tail"
+	res, err := re.Replace(input, "[$`$']", -1, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want, got := strings.Repeat("x", 20)+"["+strings.Repeat("x", 20)+"tail]tail", res; want != got {
+		t.Fatalf("Replace $` $' = %q, want %q", got, want)
+	}
+
+	res, err = re.Replace("préneedle", "$_", -1, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want, got := "prépréneedle", res; want != got {
+		t.Fatalf("Replace $_ = %q, want %q", got, want)
+	}
+}
+
+func TestReplace_UnicodePrefix(t *testing.T) {
+	re := MustCompile(`(needle)`)
+	prefix := strings.Repeat("pré", 8)
+	input := prefix + "needle" + "tail"
+
+	res, err := re.Replace(input, "[$1]", -1, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want, got := prefix+"[needle]tail", res; want != got {
+		t.Fatalf("Replace $1 = %q, want %q", got, want)
+	}
+
+	res, err = re.Replace(input, "[$`$']", -1, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want, got := prefix+"["+prefix+"tail]tail", res; want != got {
+		t.Fatalf("Replace $` $' = %q, want %q", got, want)
+	}
+
+	res, err = re.Replace(input, "$_", -1, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want, got := prefix+input+"tail", res; want != got {
+		t.Fatalf("Replace $_ = %q, want %q", got, want)
+	}
+
+	res, err = re.ReplaceFunc(input, func(m Match) string {
+		if m.String() != "needle" {
+			t.Fatalf("ReplaceFunc match = %q", m.String())
+		}
+		if g := m.GroupByNumber(1); g == nil || g.String() != "needle" {
+			t.Fatalf("ReplaceFunc group = %v", g)
+		}
+		return "<" + m.String() + ">"
+	}, -1, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want, got := prefix+"<needle>tail", res; want != got {
+		t.Fatalf("ReplaceFunc = %q, want %q", got, want)
+	}
+}
+
+func TestReplace_StartAtMidRune(t *testing.T) {
+	re := MustCompile(`abc`)
+	if _, err := re.Replace("aéabc", "X", 2, -1); err == nil {
+		t.Fatal("Expected startAt in the middle of a rune to fail")
 	}
 }

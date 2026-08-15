@@ -1,9 +1,9 @@
 package regexp2
 
 import (
-	"testing"
-
 	"slices"
+	"strings"
+	"testing"
 )
 
 func TestBasicSplit(t *testing.T) {
@@ -57,6 +57,19 @@ func TestSplit_LimitCount1(t *testing.T) {
 		t.Fatalf("Expected no error, got %v", err)
 	}
 	if want, got := []string{"123abcde456aBCDe789abcde"}, vals; !slices.Equal(want, got) {
+		t.Errorf("wanted %v got %v", want, got)
+	}
+}
+
+func TestSplit_UnicodePrefixCaptures(t *testing.T) {
+	re := MustCompile(`(needle)`)
+	prefix := strings.Repeat("pré", 8)
+	input := prefix + "needle" + "tail"
+	vals, err := re.Split(input, -1)
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if want, got := []string{prefix, "needle", "tail"}, vals; !slices.Equal(want, got) {
 		t.Errorf("wanted %v got %v", want, got)
 	}
 }

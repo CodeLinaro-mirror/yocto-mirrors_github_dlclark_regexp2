@@ -55,6 +55,17 @@ func TestStringSearchValues_IgnoreCase(t *testing.T) {
 	}
 }
 
+func TestAsciiSearchValues_LastIndexOfAny(t *testing.T) {
+	sv := NewAsciiSearchValues("DFHJLNPRTVXZ")
+	i := sv.LastIndexOfAny([]rune("DxyzxyzXxyz"))
+	if want, got := 7, i; want != got {
+		t.Errorf("LastIndexOfAny = %v, want %v", got, want)
+	}
+	if sv.LastIndexOfAny([]rune("abc")) != -1 {
+		t.Fatal("expected miss")
+	}
+}
+
 var text []rune
 
 func makeText(n int) []rune {

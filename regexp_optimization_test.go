@@ -21,10 +21,22 @@ func TestBacktrackingStackLimit(t *testing.T) {
 				t.Fatalf("MatchString error = %v, want ErrBacktrackingStackLimit", err)
 			}
 
-			runner := re.getRunner()
-			trackSize := len(runner.runtrack)
-			re.putRunner(runner)
-			if got, want := trackSize, 32; got != want {
+			// Measure the runner that executed the match. sync.Pool may drop the
+			// cached runner between Put and Get (and does so aggressively under
+			// the race detector), so getRunner() after MatchString is not the
+			// instance that just ran.
+			runner := &Runner{re: re, code: re.code}
+			if re.quickCode != nil {
+				runner.code = re.quickCode
+			}
+			m, err := runner.scan(nil, nil, 0, -1, true, re.MatchTimeout)
+			if m != nil {
+				t.Fatal("scan unexpectedly matched")
+			}
+			if !errors.Is(err, ErrBacktrackingStackLimit) {
+				t.Fatalf("scan error = %v, want ErrBacktrackingStackLimit", err)
+			}
+			if got, want := len(runner.runtrack), 32; got != want {
 				t.Fatalf("allocated backtracking stack size = %d, want %d", got, want)
 			}
 		})
@@ -138,6 +150,28 @@ func TestReplacerDataCacheMaxBytes(t *testing.T) {
 	}
 	if got := len(re.replaceCache.cache); got != 0 {
 		t.Fatalf("cache size = %d, want 0", got)
+	}
+}
+
+func TestReplacerDataCacheEvictionMatchesUncached(t *testing.T) {
+	cached := MustCompile(`a+`, OptionMaxCachedReplacerDataEntries(2), OptionMaxCachedReplacerDataBytes(-1))
+	uncached := MustCompile(`a+`, OptionMaxCachedReplacerDataEntries(0))
+	input := "xxaa--a--aaa"
+
+	for i := 0; i < 20; i++ {
+		for _, repl := range []string{"<" + strconv.Itoa(i) + ">", "[$&]", "$`"} {
+			got, err := cached.Replace(input, repl, -1, -1)
+			if err != nil {
+				t.Fatalf("cached Replace(%q) failed: %v", repl, err)
+			}
+			want, err := uncached.Replace(input, repl, -1, -1)
+			if err != nil {
+				t.Fatalf("uncached Replace(%q) failed: %v", repl, err)
+			}
+			if got != want {
+				t.Fatalf("Replace(%q) = %q, want %q", repl, got, want)
+			}
+		}
 	}
 }
 
