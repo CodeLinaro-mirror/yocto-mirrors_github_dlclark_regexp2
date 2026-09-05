@@ -94,26 +94,12 @@ func (re *Regexp) run(quick bool, textstart, previousMatchLength int, input []ru
 		runner.code = re.quickCode
 	}
 
-	return runner.scan(input, textInfo, textstart, previousMatchLength, quick, re.MatchTimeout)
+	return runner.scan(input, textInfo, textstart, textstart, previousMatchLength, quick, re.MatchTimeout)
 }
 
-// Scans the string to find the first match. Uses the Match object
-// both to feed text in and as a place to store matches that come out.
-//
-// All the action is in the Go() method. Our
-// responsibility is to load up the class members before
-// calling Go.
-//
-// The optimizer can compute a set of candidate starting characters,
-// and we could use a separate method Skip() that will quickly scan past
-// any characters that we know can't match.
-//
-// The input slice is passed separately from matchText so quick scans can avoid
-// allocating match metadata. When textInfo is nil, successful matches are only
-// used as a boolean result and capture text is intentionally unavailable. If
-// we collapsed down to just textInfo it would "escape" and hit the GC for fast
-// scans without captures.
-func (r *Runner) scan(rt []rune, textInfo *matchText, textstart, previousMatchLength int, quick bool, timeout time.Duration) (*Match, error) {
+// scan starts at candidate while preserving textstart for \G. Both are rune
+// indexes in rt. A nil textInfo allows quick scans to omit capture metadata.
+func (r *Runner) scan(rt []rune, textInfo *matchText, textstart, candidate, previousMatchLength int, quick bool, timeout time.Duration) (*Match, error) {
 	r.timeout = timeout
 	r.ignoreTimeout = (time.Duration(math.MaxInt64) == timeout)
 	r.debug = r.re.Debug()
@@ -132,8 +118,7 @@ func (r *Runner) scan(rt []rune, textInfo *matchText, textstart, previousMatchLe
 		stoppos = 0
 	}
 
-	r.Runtextpos = textstart
-	//initted := false
+	r.Runtextpos = candidate
 
 	// setup our scanner functions
 	findFirstChar := r.re.findFirstChar

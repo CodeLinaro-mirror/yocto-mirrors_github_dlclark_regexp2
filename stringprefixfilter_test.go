@@ -1,6 +1,7 @@
 package regexp2
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -34,6 +35,39 @@ func TestStringIndexPrefixFilter(t *testing.T) {
 	}
 }
 
+func TestStringFilterInvalidUTF8Regression(t *testing.T) {
+	for _, pattern := range []string{`�abc`, `(?:�abc|xyz)`, `.�ab`, `[x]*�abc`} {
+		t.Run(pattern, func(t *testing.T) {
+			re := MustCompile(pattern)
+			for _, prefix := range []string{"x", strings.Repeat("x", 128)} {
+				input := prefix + "\xffabc"
+				want, err := re.FindRunesMatch([]rune(input))
+				if err != nil || want == nil {
+					t.Fatalf("rune reference = %v, %v", want, err)
+				}
+				got, err := re.MatchString(input)
+				if err != nil || !got {
+					t.Fatalf("MatchString = %v, %v", got, err)
+				}
+				m, err := re.FindStringMatch(input)
+				if err != nil || m == nil || m.RuneIndex != want.RuneIndex || m.RuneLength != want.RuneLength {
+					t.Fatalf("FindStringMatch = %v, %v; want %v", m, err, want)
+				}
+				indices, err := re.FindAllStringIndex(input, -1)
+				expected := [][]int{{want.RuneIndex, want.RuneIndex + want.RuneLength}}
+				if err != nil || !reflect.DeepEqual(indices, expected) {
+					t.Fatalf("indices = %v, %v; want %v", indices, err, expected)
+				}
+				replaced, err := re.Replace(input, "!", -1, -1)
+				expectedReplacement := input[:want.RuneIndex] + "!" + input[want.RuneIndex+want.RuneLength:]
+				if err != nil || replaced != expectedReplacement {
+					t.Fatalf("Replace = %q, %v; want %q", replaced, err, expectedReplacement)
+				}
+			}
+		})
+	}
+}
+
 func TestStringIndexPrefixFilterMinRequiredLengthUsesBytes(t *testing.T) {
 	filter := stringIndexPrefixFilter("é", false, 2)
 	if filter == nil {
@@ -46,6 +80,31 @@ func TestStringIndexPrefixFilterMinRequiredLengthUsesBytes(t *testing.T) {
 	}
 	if got, want := candidateByteIndex, 0; got != want {
 		t.Fatalf("candidateByteIndex = %d, want %d", got, want)
+	}
+}
+
+func TestStringIndexPrefixFilterRuneError(t *testing.T) {
+	filter := stringIndexPrefixFilter("�abc", false, 4)
+	if filter == nil {
+		t.Fatal("expected a filter for valid UTF-8")
+	}
+	for _, tc := range []struct {
+		input string
+		index int
+		ok    bool
+	}{
+		{"xx�abc", 2, true},
+		{"xxxxx", 0, false},
+		{"x\xffabc�abc", 0, true}, // invalid input must reach the rune engine
+	} {
+		index, ok := filter(tc.input, 0)
+		if index != tc.index || ok != tc.ok {
+			t.Fatalf("filter(%q) = %d, %v; want %d, %v", tc.input, index, ok, tc.index, tc.ok)
+		}
+	}
+	m, err := MustCompile("�abc").FindStringMatch("x\xffabc�abc")
+	if err != nil || m == nil || m.RuneIndex != 1 {
+		t.Fatalf("expected the invalid-byte match before the valid U+FFFD: %v, %v", m, err)
 	}
 }
 
@@ -332,6 +391,89 @@ func TestFindStringPrefixCandidateDisabledForRightToLeft(t *testing.T) {
 	}
 	if got, want := candidateByteIndex, 3; got != want {
 		t.Fatalf("candidateByteIndex = %d, want %d", got, want)
+	}
+}
+
+func TestStringSearchOriginRegression(t *testing.T) {
+	re := MustCompile(`(?:\Gfoo|bar)`)
+	for _, input := range []string{"xfoo", "foo", "xbar"} {
+		want := input != "xfoo"
+		got, err := re.MatchString(input)
+		if err != nil || got != want {
+			t.Fatalf("MatchString(%q) = %v, %v", input, got, err)
+		}
+		m, err := re.FindStringMatch(input)
+		if err != nil || (m != nil) != want {
+			t.Fatalf("FindStringMatch(%q) = %v, %v", input, m, err)
+		}
+	}
+	for _, tt := range []struct {
+		input string
+		start int
+		want  bool
+	}{
+		{"xxfoo", 1, false}, {"xxfoo", 2, true}, {"xxbar", 1, true},
+		{"éxfoo", 2, false}, {"éxfoo", 3, true}, {"éxbar", 2, true},
+	} {
+		m, err := re.FindStringMatchStartingAt(tt.input, tt.start)
+		if err != nil || (m != nil) != tt.want {
+			t.Fatalf("StartingAt(%q,%d) = %v, %v", tt.input, tt.start, m, err)
+		}
+	}
+	indices, err := re.FindAllStringIndex("xfoo", -1)
+	if err != nil || len(indices) != 0 {
+		t.Fatalf("indices = %v, %v", indices, err)
+	}
+	parts, err := re.Split("xfoo", -1)
+	if err != nil || !reflect.DeepEqual(parts, []string{"xfoo"}) {
+		t.Fatalf("split = %q, %v", parts, err)
+	}
+	got, err := re.ReplaceFunc("xfoo", func(Match) string { return "!" }, -1, -1)
+	if err != nil || got != "xfoo" {
+		t.Fatalf("ReplaceFunc = %q, %v", got, err)
+	}
+}
+
+func TestStringSearchOriginNextMatches(t *testing.T) {
+	for _, tc := range []struct{ pattern, input string }{
+		{`(?:\Gfoo|bar)`, "ébarfoo"},
+		{`(?:\Gfoo|bar)`, "ébarxfoo"},
+		{`(?<=\Gx)foo|bar`, "xfoo"},
+		{`(?<=x)foo`, "éxfoo"},
+	} {
+		t.Run(tc.pattern+tc.input, func(t *testing.T) {
+			re := MustCompile(tc.pattern)
+			want, err := re.FindRunesMatch([]rune(tc.input))
+			if err != nil {
+				t.Fatal(err)
+			}
+			matched, err := re.MatchString(tc.input)
+			if err != nil || matched != (want != nil) {
+				t.Fatalf("MatchString = %v, %v; reference = %v", matched, err, want)
+			}
+			got, err := re.FindStringMatch(tc.input)
+			var expectedIndices [][]int
+			for got != nil || want != nil {
+				if err != nil || got == nil || want == nil || got.RuneIndex != want.RuneIndex || got.String() != want.String() {
+					t.Fatalf("string = %v, %v; runes = %v", got, err, want)
+				}
+				start, length := want.ByteRange()
+				expectedIndices = append(expectedIndices, []int{start, start + length})
+				got, err = re.FindNextMatch(got)
+				next, nextErr := re.FindNextMatch(want)
+				if nextErr != nil {
+					t.Fatal(nextErr)
+				}
+				want = next
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			indices, err := re.FindAllStringIndex(tc.input, -1)
+			if err != nil || !reflect.DeepEqual(indices, expectedIndices) {
+				t.Fatalf("indices = %v, %v; want %v", indices, err, expectedIndices)
+			}
+		})
 	}
 }
 

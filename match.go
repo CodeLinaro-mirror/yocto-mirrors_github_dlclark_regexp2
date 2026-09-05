@@ -374,9 +374,11 @@ func (m *Match) GroupByName(name string) *Group {
 func (m *Match) GroupByNumber(num int) *Group {
 	// check our sparse map
 	if m.sparseCaps != nil {
-		if newNum, ok := m.sparseCaps[num]; ok {
-			num = newNum
+		newNum, ok := m.sparseCaps[num]
+		if !ok {
+			return nil
 		}
+		num = newNum
 	}
 	if num >= len(m.matchcount) || num < 0 {
 		return nil

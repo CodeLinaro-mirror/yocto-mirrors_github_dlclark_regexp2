@@ -28,6 +28,29 @@ func TestBasicSplit_IgnoreCase(t *testing.T) {
 	}
 }
 
+func TestSplitRightToLeftRegression(t *testing.T) {
+	for _, tt := range []struct {
+		pattern, input string
+		count          int
+		want           []string
+	}{
+		{`-`, "a-b-c", -1, []string{"a", "b", "c"}},
+		{`-`, "a-b-c-d", 2, []string{"a-b", "c", "d"}},
+		{`-`, "a-b-c", 1, []string{"a-b-c"}},
+		{`-`, "abc", -1, []string{"abc"}},
+		{`-`, "é-猫-日", -1, []string{"é", "猫", "日"}},
+		{`(-)(:)`, "a-:b-:c", -1, []string{"a", ":", "-", "b", ":", "-", "c"}},
+		{`(?=.)`, "abc", -1, []string{"", "a", "b", "c"}},
+	} {
+		t.Run(tt.pattern+tt.input, func(t *testing.T) {
+			got, err := MustCompile(tt.pattern, RightToLeft).Split(tt.input, tt.count)
+			if err != nil || !slices.Equal(got, tt.want) {
+				t.Fatalf("got %q, %v; want %q", got, err, tt.want)
+			}
+		})
+	}
+}
+
 func TestSplit_ZeroWidth(t *testing.T) {
 	re := MustCompile(`(?<=\G..)(?=..)`)
 	vals, err := re.Split("aabbccdd", -1)

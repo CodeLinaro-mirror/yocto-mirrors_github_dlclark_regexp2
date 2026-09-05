@@ -195,7 +195,7 @@ func replaceRunnerLTR(regex *Regexp, data *syntax.ReplacerData, input string, st
 		runeStart = 0
 	}
 
-	m, err := runner.scan(text, textInfo, runeStart, -1, true, regex.MatchTimeout)
+	m, err := runner.scan(text, textInfo, runeStart, runeStart, -1, true, regex.MatchTimeout)
 	if err != nil {
 		return "", err
 	}
@@ -226,7 +226,7 @@ func replaceRunnerLTR(regex *Regexp, data *syntax.ReplacerData, input string, st
 			break
 		}
 
-		m, err = runner.scan(text, textInfo, m.textpos, m.RuneLength, true, regex.MatchTimeout)
+		m, err = runner.scan(text, textInfo, m.textpos, m.textpos, m.RuneLength, true, regex.MatchTimeout)
 		if err != nil {
 			return "", err
 		}
@@ -259,7 +259,7 @@ func replaceRunnerRTL(regex *Regexp, data *syntax.ReplacerData, input string, st
 		runeStart = len(text)
 	}
 
-	m, err := runner.scan(text, textInfo, runeStart, -1, true, regex.MatchTimeout)
+	m, err := runner.scan(text, textInfo, runeStart, runeStart, -1, true, regex.MatchTimeout)
 	if err != nil {
 		return "", err
 	}
@@ -297,7 +297,7 @@ func replaceRunnerRTL(regex *Regexp, data *syntax.ReplacerData, input string, st
 			break
 		}
 
-		m, err = runner.scan(text, textInfo, m.textpos, m.RuneLength, true, regex.MatchTimeout)
+		m, err = runner.scan(text, textInfo, m.textpos, m.textpos, m.RuneLength, true, regex.MatchTimeout)
 		if err != nil {
 			return "", err
 		}
@@ -347,7 +347,10 @@ func replacementImplRTL(data *syntax.ReplacerData, al *[]string, m *Match) {
 	l := *al
 	buf := &bytes.Buffer{}
 
-	for _, r := range data.Rules {
+	// The caller reverses the complete segment list, so emit each
+	// replacement's fragments in reverse order as well.
+	for i := len(data.Rules) - 1; i >= 0; i-- {
+		r := data.Rules[i]
 		buf.Reset()
 		if r >= 0 { // string lookup
 			l = append(l, data.Strings[r])

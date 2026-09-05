@@ -41,6 +41,19 @@ func (re *Regexp) decodeLeftContextRunes() int {
 	return re.leftContextRunes
 }
 
+// stringSearchOrigin preserves the caller's origin when \G may observe it.
+// Such patterns retain the whole input, so no decode offset is needed.
+// Otherwise the origin is unobservable and the candidate is sufficient.
+func (re *Regexp) stringSearchOrigin(input string, startAt, candidate int) int {
+	if !re.RightToLeft() && re.decodeLeftContextRunes() < 0 {
+		if startAt <= 0 {
+			return 0
+		}
+		return utf8.RuneCountInString(input[:startAt])
+	}
+	return candidate
+}
+
 // decodeString converts s to []rune for the MatchString startAt<=0 path.
 // Keep this as close as possible to a single UTF-8 walk so 4–30 byte
 // matches stay cheap.

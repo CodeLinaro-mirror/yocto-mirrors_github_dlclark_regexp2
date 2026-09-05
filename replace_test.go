@@ -96,6 +96,27 @@ func TestReplace_BeginBeforeAfterEnd(t *testing.T) {
 	}
 }
 
+func TestReplacementRightToLeftFragmentsRegression(t *testing.T) {
+	for _, tt := range []struct{ replacement, want string }{
+		{`x${1}y`, "xay-xay"},
+		{`pre${1}post`, "preapost-preapost"},
+		{`${1}${1}`, "aa-aa"},
+		{`literal`, "literal-literal"},
+		{"", "-"},
+		{"x$`y", "xy-xa-y"},
+		{"x$'y", "x-ay-xy"},
+		{`x$+y`, "xay-xay"},
+		{`x$_y`, "xa-ay-xa-ay"},
+	} {
+		t.Run(tt.replacement, func(t *testing.T) {
+			got, err := MustCompile(`(a)`, RightToLeft).Replace("a-a", tt.replacement, -1, -1)
+			if err != nil || got != tt.want {
+				t.Fatalf("got %q, %v; want %q", got, err, tt.want)
+			}
+		})
+	}
+}
+
 func TestReplace_BadSyntax(t *testing.T) {
 	re := MustCompile(`a`, None)
 	myStr := "this is a test"

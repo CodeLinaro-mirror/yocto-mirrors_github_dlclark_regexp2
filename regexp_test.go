@@ -476,6 +476,36 @@ func TestGroups_Basic(t *testing.T) {
 	}
 }
 
+func TestGroupByNumberSparseRegression(t *testing.T) {
+	for _, tt := range []struct {
+		pattern, input string
+		groups         map[int]string
+		missing        []int
+	}{
+		{`(?<5>a)`, "a", map[int]string{0: "a", 5: "a"}, []int{-1, 1, 2, 6}},
+		{`(a)(?<5>b)`, "ab", map[int]string{0: "ab", 1: "a", 5: "b"}, []int{-1, 2, 3, 6}},
+		{`(a)(b)`, "ab", map[int]string{0: "ab", 1: "a", 2: "b"}, []int{-1, 3, 5}},
+	} {
+		t.Run(tt.pattern, func(t *testing.T) {
+			m, err := MustCompile(tt.pattern).FindStringMatch(tt.input)
+			if err != nil || m == nil {
+				t.Fatalf("match = %v, %v", m, err)
+			}
+			for number, want := range tt.groups {
+				g := m.GroupByNumber(number)
+				if g == nil || g.String() != want {
+					t.Errorf("group %d = %v; want %q", number, g, want)
+				}
+			}
+			for _, number := range tt.missing {
+				if g := m.GroupByNumber(number); g != nil {
+					t.Errorf("group %d = %v; want nil", number, g)
+				}
+			}
+		})
+	}
+}
+
 func TestErr_GroupName(t *testing.T) {
 	// group 0 is off limits
 	if _, err := Compile("foo(?<0>bar)"); err == nil {
@@ -1297,6 +1327,19 @@ func TestECMANamedGroupNumberAssignment(t *testing.T) {
 	}
 	if num := re.GroupNumberFromName("1"); num != -1 {
 		t.Fatalf("GroupNumberFromName(\"1\") = %d, want -1", num)
+	}
+}
+
+func TestECMAGroupByNumberRegression(t *testing.T) {
+	if _, err := Compile(`(?<5>a)`, ECMAScript); err == nil {
+		t.Fatal("ECMAScript accepted a numeric group name")
+	}
+	m, err := MustCompile(`(?<x>a)(b)`, ECMAScript).FindStringMatch("ab")
+	if err != nil || m == nil {
+		t.Fatalf("ECMAScript match = %v, %v", m, err)
+	}
+	if m.GroupByNumber(1).String() != "a" || m.GroupByNumber(2).String() != "b" || m.GroupByNumber(5) != nil {
+		t.Fatal("incorrect ECMAScript group lookup")
 	}
 }
 

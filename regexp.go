@@ -244,7 +244,7 @@ func (re *Regexp) FindStringMatch(s string) (*Match, error) {
 	if !ok {
 		return nil, nil
 	}
-	return re.findDecodedStringMatch(s, startAt)
+	return re.findDecodedStringMatch(s, startAt, -1)
 }
 
 // FindRunesMatch searches the input rune slice for a Regexp match
@@ -254,24 +254,25 @@ func (re *Regexp) FindRunesMatch(r []rune) (*Match, error) {
 
 // FindStringMatchStartingAt searches the input string for a Regexp match starting at the startAt index
 func (re *Regexp) FindStringMatchStartingAt(s string, startAt int) (*Match, error) {
-	startAt, ok, err := re.findStringMatchStart(s, startAt)
+	candidate, ok, err := re.findStringMatchStart(s, startAt)
 	if err != nil {
 		return nil, err
 	}
 	if !ok {
 		return nil, nil
 	}
-	return re.findDecodedStringMatch(s, startAt)
+	return re.findDecodedStringMatch(s, candidate, startAt)
 }
 
-func (re *Regexp) findDecodedStringMatch(s string, startAt int) (*Match, error) {
+func (re *Regexp) findDecodedStringMatch(s string, candidate, startAt int) (*Match, error) {
 	// Returned matches retain their rune data, so this path must not consume a
 	// pooled buffer that can never be returned.
-	d := re.decodeStringInput(s, startAt, false)
+	d := re.decodeStringInput(s, candidate, false)
 	runner := re.getRunner()
 	defer re.putRunner(runner)
 	text := newStringMatchTextAt(s, d.runes, d.runeOffset, d.byteOffset)
-	return runner.scan(d.runes, text, d.runeStart, -1, false, re.MatchTimeout)
+	origin := re.stringSearchOrigin(s, startAt, d.runeStart)
+	return runner.scan(d.runes, text, origin, d.runeStart, -1, false, re.MatchTimeout)
 }
 
 // FindRunesMatchStartingAt searches the input rune slice for a Regexp match starting at the startAt index
@@ -310,7 +311,8 @@ func (re *Regexp) FindAllStringIndex(s string, n int) ([][]int, error) {
 	if re.quickCode != nil {
 		runner.code = re.quickCode
 	}
-	return re.findAllRunesIndex(runner, d.runes, d.runeStart, n, func(runeIndex, runeLength int) (int, int) {
+	origin := re.stringSearchOrigin(s, -1, d.runeStart)
+	return re.findAllRunesIndex(runner, d.runes, origin, d.runeStart, n, func(runeIndex, runeLength int) (int, int) {
 		if len(d.runes) == len(byteOffsets.input) {
 			return d.byteOffset + runeIndex, d.byteOffset + runeIndex + runeLength
 		}
@@ -335,12 +337,12 @@ func (re *Regexp) FindAllRunesIndex(r []rune, n int) ([][]int, error) {
 	if re.quickCode != nil {
 		runner.code = re.quickCode
 	}
-	return re.findAllRunesIndex(runner, r, startAt, n, func(runeIndex, runeLength int) (int, int) {
+	return re.findAllRunesIndex(runner, r, startAt, startAt, n, func(runeIndex, runeLength int) (int, int) {
 		return runeIndex, runeIndex + runeLength
 	})
 }
 
-func (re *Regexp) findAllRunesIndex(runner *Runner, input []rune, startAt, n int, makeIndex func(runeIndex, runeLength int) (int, int)) ([][]int, error) {
+func (re *Regexp) findAllRunesIndex(runner *Runner, input []rune, origin, startAt, n int, makeIndex func(runeIndex, runeLength int) (int, int)) ([][]int, error) {
 	var out [][]int
 	var flat []int
 	if n > 0 {
@@ -351,7 +353,7 @@ func (re *Regexp) findAllRunesIndex(runner *Runner, input []rune, startAt, n int
 	prevEnd := -1
 	previousMatchLength := -1
 	for n != 0 {
-		m, err := runner.scan(input, nil, startAt, previousMatchLength, true, re.MatchTimeout)
+		m, err := runner.scan(input, nil, origin, startAt, previousMatchLength, true, re.MatchTimeout)
 		if err != nil {
 			return nil, err
 		}
@@ -371,6 +373,7 @@ func (re *Regexp) findAllRunesIndex(runner *Runner, input []rune, startAt, n int
 		}
 
 		startAt = m.textpos
+		origin = startAt
 		previousMatchLength = m.RuneLength
 	}
 	return out, nil
@@ -424,10 +427,6 @@ func (re *Regexp) MatchString(s string) (bool, error) {
 
 		return re.matchStringAt(s, candidateByteIndex)
 	}
-	return re.matchString(s)
-}
-
-func (re *Regexp) matchString(s string) (bool, error) {
 	return re.matchStringAt(s, -1)
 }
 
@@ -462,7 +461,8 @@ func (re *Regexp) matchStringAt(s string, startAt int) (bool, error) {
 		runner.code = re.quickCode
 	}
 
-	m, err := runner.scan(input, nil, runeStart, -1, true, re.MatchTimeout)
+	origin := re.stringSearchOrigin(s, -1, runeStart)
+	m, err := runner.scan(input, nil, origin, runeStart, -1, true, re.MatchTimeout)
 	if err != nil {
 		return false, err
 	}
