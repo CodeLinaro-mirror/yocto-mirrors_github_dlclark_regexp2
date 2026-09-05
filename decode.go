@@ -12,9 +12,10 @@ import (
 type decodedInput struct {
 	runes      []rune
 	pooled     *[]rune
-	runeStart  int // index in runes of the requested startAt; -1 if not a rune boundary
-	runeOffset int // original-string rune index of runes[0]
-	byteOffset int // original-string byte index of runes[0]
+	runeStart  int  // index in runes of the requested startAt; -1 if not a rune boundary
+	runeOffset int  // original-string rune index of runes[0]
+	byteOffset int  // original-string byte index of runes[0]
+	ascii      bool // every decoded rune is ASCII; invalid UTF-8 is not ASCII
 }
 
 // decodeFrom is the first original-string byte that must be decoded. 0 means
@@ -85,6 +86,7 @@ func decodeInput(s string, startAt, decodeFrom, maxCachedLength int, needOffsets
 		runes:      runes,
 		pooled:     pooledBuffer,
 		byteOffset: decodeFrom,
+		ascii:      ascii,
 		runeStart:  startRuneIndex(s, startAt, decodeFrom, n, ascii),
 	}
 

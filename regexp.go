@@ -13,7 +13,6 @@ import (
 	"errors"
 	"log"
 	"math"
-	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -295,22 +294,27 @@ func (re *Regexp) FindAllStringIndex(s string, n int) ([][]int, error) {
 		return nil, nil
 	}
 
-	d := re.decodeStringInput(s, startAt, true)
+	// Index results only need byte offsets. Keep the mapper relative to the
+	// decoded suffix so neither decoding nor mapping has to count prefix runes.
+	d := decodeInput(s, startAt, re.decodeFrom(s, startAt), re.optimizations.MaxCachedRuneBufferLength, false)
 	runner := re.getRunner()
 	defer func() {
 		re.putRunner(runner)
 		d.release()
 	}()
-	byteOffsets := newStringByteMapper(s)
+	byteOffsets := stringByteMapper{input: s[d.byteOffset:]}
+	if re.RightToLeft() {
+		byteOffsets.runePos = len(d.runes)
+		byteOffsets.bytePos = len(byteOffsets.input)
+	}
 	if re.quickCode != nil {
 		runner.code = re.quickCode
 	}
 	return re.findAllRunesIndex(runner, d.runes, d.runeStart, n, func(runeIndex, runeLength int) (int, int) {
-		if byteOffsets == nil {
+		if len(d.runes) == len(byteOffsets.input) {
 			return d.byteOffset + runeIndex, d.byteOffset + runeIndex + runeLength
 		}
-		start := runeIndex + d.runeOffset
-		return byteOffsets.byteIndex(start), byteOffsets.byteIndex(start + runeLength)
+		return d.byteOffset + byteOffsets.byteIndex(runeIndex), d.byteOffset + byteOffsets.byteIndex(runeIndex+runeLength)
 	})
 }
 
@@ -373,40 +377,30 @@ func (re *Regexp) findAllRunesIndex(runner *Runner, input []rune, startAt, n int
 }
 
 type stringByteMapper struct {
-	runeIndexes []int
-	deltas      []int
+	input   string
+	runePos int
+	bytePos int
 }
 
-func newStringByteMapper(s string) *stringByteMapper {
-	var mapper *stringByteMapper
-	runeIndex := 0
-	delta := 0
-	for strIdx, ch := range s {
-		runeLen := utf8.RuneLen(ch)
-		if ch == utf8.RuneError {
-			_, runeLen = utf8.DecodeRuneInString(s[strIdx:])
-		}
-		if runeLen != 1 {
-			if mapper == nil {
-				mapper = &stringByteMapper{}
-			}
-			delta += runeLen - 1
-			mapper.runeIndexes = append(mapper.runeIndexes, runeIndex+1)
-			mapper.deltas = append(mapper.deltas, delta)
-		}
-		runeIndex++
-	}
-	return mapper
-}
-
+// runeIndex is relative to input; each invalid UTF-8 byte counts as one rune.
 func (m *stringByteMapper) byteIndex(runeIndex int) int {
-	i := sort.Search(len(m.runeIndexes), func(i int) bool {
-		return m.runeIndexes[i] > runeIndex
-	}) - 1
-	if i < 0 {
-		return runeIndex
+	for m.runePos < runeIndex {
+		size := 1
+		if m.input[m.bytePos] >= utf8.RuneSelf {
+			_, size = utf8.DecodeRuneInString(m.input[m.bytePos:])
+		}
+		m.bytePos += size
+		m.runePos++
 	}
-	return runeIndex + m.deltas[i]
+	for m.runePos > runeIndex {
+		size := 1
+		if m.input[m.bytePos-1] >= utf8.RuneSelf {
+			_, size = utf8.DecodeLastRuneInString(m.input[:m.bytePos])
+		}
+		m.bytePos -= size
+		m.runePos--
+	}
+	return m.bytePos
 }
 
 // FindNextMatch returns the next match in the same input string as the match parameter.
