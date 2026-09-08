@@ -96,6 +96,11 @@ func TestReplaceStringFastPaths(t *testing.T) {
 		{`\Gneedle`, "xxneedleneedleTAIL", "pin", "xxpinpinTAIL", 2, -1},
 		{`needle`, "xxneedleneedleTAIL", "pin", "xxpinneedleTAIL", 0, 1},
 		{`needle`, "\xffnone\x80", "pin", "\xffnone\x80", -1, -1},
+		{`aaba|aaca|bada`, strings.Repeat("a", 80) + "ca?bada!", "[$&]", strings.Repeat("a", 78) + "[aaca]?[bada]!", -1, -1},
+		{`(?i)ab`, "aX AB!ab?", "[$&]", "aX [AB]![ab]?", -1, -1},
+		{`[ACEGIK]{2,4}`, "A!ACE?IK", "[$&]", "A![ACE]?[IK]", -1, -1},
+		{`aa[ \n]$`, "aaa\n", "[$&]", "a[aa\n]", -1, -1},
+		{`aaba|aaca|bada`, strings.Repeat("a", 80), "[$&]", strings.Repeat("a", 80), -1, -1},
 	} {
 		re := MustCompile(tc.pattern)
 		got, err := re.Replace(tc.input, tc.replacement, tc.start, tc.count)
@@ -128,6 +133,11 @@ func TestSplitReusableCaptures(t *testing.T) {
 		{``, "é界", -1, []string{"", "é", "界", ""}},
 		{`(needle)`, "é界needlex\xffneedle😀", -1, []string{"é界", "needle", "x\xff", "needle", "😀"}},
 		{`(?<=(é))needle`, "éneedle界éneedle😀", -1, []string{"é", "é", "界é", "é", "😀"}},
+		{`aaba|aaca|bada`, strings.Repeat("a", 80) + "ca?bada!", -1, []string{strings.Repeat("a", 78), "?", "!"}},
+		{`(?i)ab`, "aX AB!ab?", -1, []string{"aX ", "!", "?"}},
+		{`[ACEGIK]{2,4}`, "A!ACE?IK", -1, []string{"A!", "?", ""}},
+		{`aa[ \n]$`, "aaa\n", -1, []string{"a", ""}},
+		{`aaba|aaca|bada`, strings.Repeat("a", 80), -1, []string{strings.Repeat("a", 80)}},
 	} {
 		t.Run(tc.pattern, func(t *testing.T) {
 			re := MustCompile(tc.pattern)

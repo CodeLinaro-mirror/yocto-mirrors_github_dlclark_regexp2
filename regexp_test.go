@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -205,21 +206,58 @@ func TestCapture_ByteOffsetsFindNextMatch(t *testing.T) {
 }
 
 func TestCapture_ByteOffsetsStartingAt(t *testing.T) {
-	re := MustCompile(`漢`)
-	m, err := re.FindStringMatchStartingAt("aé漢b", 1)
-	if err != nil {
-		t.Fatalf("Unexpected match error: %v", err)
+	type startCase struct {
+		name, pattern, input string
+		start, want, length  int
 	}
-	if m == nil {
-		t.Fatal("Should have matched")
+	cases := []startCase{
+		{"unicode", `漢`, "aé漢b", 1, 2, 1},
 	}
-	if want, got := 2, m.RuneIndex; want != got {
-		t.Fatalf("RuneIndex wanted %v got %v", want, got)
+	for _, tc := range []struct{ start, want int }{{0, 79}, {79, 79}, {80, 84}, {83, 84}, {84, 84}, {85, -1}, {88, -1}} {
+		cases = append(cases, startCase{fmt.Sprintf("alternative_%d", tc.start), `aaba|aaca|bada`, "界" + strings.Repeat("a", 80) + "ca?aaba", tc.start, tc.want, 4})
 	}
-	assertByteRange(t, "Match", m, 3, 3)
-
-	if _, err := re.FindStringMatchStartingAt("aé漢b", 2); err == nil {
-		t.Fatal("Expected startAt in the middle of a rune to fail")
+	for _, tc := range []struct{ start, want int }{{0, 2}, {1, 2}, {2, 2}, {3, -1}, {5, -1}} {
+		cases = append(cases, startCase{fmt.Sprintf("end_anchor_%d", tc.start), `(?<head>a)(?<tail>a[ \n])$`, "界aaa\n", tc.start, tc.want, 3})
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			re := MustCompile(tc.pattern)
+			offsets := []int{}
+			for i := range tc.input {
+				offsets = append(offsets, i)
+			}
+			offsets = append(offsets, len(tc.input))
+			for _, mode := range []string{"string", "runes"} {
+				var m *Match
+				var err error
+				if mode == "string" {
+					m, err = re.FindStringMatchStartingAt(tc.input, offsets[tc.start])
+				} else {
+					m, err = re.FindRunesMatchStartingAt([]rune(tc.input), tc.start)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if tc.want < 0 {
+					if m != nil {
+						t.Fatalf("unexpected match %v", m)
+					}
+					continue
+				}
+				if m == nil || m.RuneIndex != tc.want || m.RuneLength != tc.length {
+					t.Fatalf("%s: got %v; want span [%d,%d)", mode, m, tc.want, tc.want+tc.length)
+				}
+				assertByteRange(t, mode, m, offsets[tc.want], offsets[tc.want+tc.length]-offsets[tc.want])
+			}
+			for i := 0; i <= len(tc.input)+1; i++ {
+				if slices.Contains(offsets, i) {
+					continue
+				}
+				if _, err := re.FindStringMatchStartingAt(tc.input, i); err == nil {
+					t.Fatalf("expected invalid starting-position error at byte %d", i)
+				}
+			}
+		})
 	}
 }
 
@@ -239,52 +277,59 @@ func TestCapture_ByteOffsetsRightToLeft(t *testing.T) {
 }
 
 func TestCapture_NamedGroupsAfterSlice(t *testing.T) {
-	re := MustCompile(`(?<left>nee)(?<right>dle)`)
-	prefix := strings.Repeat("漢", 12)
-	input := prefix + "needle-extra"
-	m, err := re.FindStringMatch(input)
-	if err != nil {
-		t.Fatalf("Unexpected match error: %v", err)
+	type groupWant struct {
+		name, text string
+		start      int
+		count      int
 	}
-	if m == nil {
-		t.Fatal("Should have matched")
-	}
-
-	if want, got := 12, m.RuneIndex; want != got {
-		t.Fatalf("Match RuneIndex wanted %v got %v", want, got)
-	}
-	if want, got := "needle", m.String(); want != got {
-		t.Fatalf("Match String wanted %v got %v", want, got)
-	}
-	assertByteRange(t, "Match", m, len(prefix), 6)
-
-	left := m.GroupByName("left")
-	if left == nil {
-		t.Fatal("missing group left")
-	}
-	if want, got := "nee", left.String(); want != got {
-		t.Fatalf("left String wanted %v got %v", want, got)
-	}
-	assertByteRange(t, "left", left, len(prefix), 3)
-
-	right := m.GroupByName("right")
-	if right == nil {
-		t.Fatal("missing group right")
-	}
-	if want, got := "dle", right.String(); want != got {
-		t.Fatalf("right String wanted %v got %v", want, got)
-	}
-	assertByteRange(t, "right", right, len(prefix)+3, 3)
-
-	groups := m.Groups()
-	if want, got := 3, len(groups); want != got {
-		t.Fatalf("Group count wanted %v got %v", want, got)
-	}
-	if want, got := "nee", groups[1].String(); want != got {
-		t.Fatalf("groups[1] wanted %v got %v", want, got)
-	}
-	if want, got := "dle", groups[2].String(); want != got {
-		t.Fatalf("groups[2] wanted %v got %v", want, got)
+	for _, tc := range []struct {
+		name, pattern, input, text string
+		start                      int
+		groups                     []groupWant
+	}{
+		{"unicode_prefix", `(?<left>nee)(?<right>dle)`, strings.Repeat("漢", 12) + "needle-extra", "needle", 12, []groupWant{{"left", "nee", 12, 1}, {"right", "dle", 15, 1}}},
+		{"rejected_alternative_captures", `(?:(?<first>aaba)|(?<second>aaca)|(?<third>bada))(?<suffix>!)`, strings.Repeat("a", 80) + "ca?bada!", "bada!", 83, []groupWant{{"first", "", 0, 0}, {"second", "", 0, 0}, {"third", "bada", 83, 1}, {"suffix", "!", 87, 1}}},
+		{"rejected_end_candidate_captures", `(?<head>a)(?<tail>a[ \n])$`, "界aaa\n", "aa\n", 2, []groupWant{{"head", "a", 2, 1}, {"tail", "a\n", 3, 1}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			re := MustCompile(tc.pattern)
+			offsets := []int{}
+			for i := range tc.input {
+				offsets = append(offsets, i)
+			}
+			offsets = append(offsets, len(tc.input))
+			for _, mode := range []string{"string", "runes"} {
+				var m *Match
+				var err error
+				if mode == "string" {
+					m, err = re.FindStringMatch(tc.input)
+				} else {
+					m, err = re.FindRunesMatch([]rune(tc.input))
+				}
+				if err != nil || m == nil {
+					t.Fatalf("%s: missing match: %v", mode, err)
+				}
+				if m.String() != tc.text || m.RuneIndex != tc.start || m.RuneLength != len([]rune(tc.text)) {
+					t.Fatalf("%s: unexpected match %q at %d", mode, m.String(), m.RuneIndex)
+				}
+				assertByteRange(t, "Match", m, offsets[tc.start], len(tc.text))
+				if len(m.Groups()) != len(tc.groups)+1 {
+					t.Fatalf("unexpected group count %d", len(m.Groups()))
+				}
+				for _, want := range tc.groups {
+					g := m.GroupByName(want.name)
+					if g == nil || g.String() != want.text || len(g.Captures) != want.count {
+						t.Fatalf("%s: unexpected group %q: %v", mode, want.name, g)
+					}
+					if want.count > 0 {
+						if g.RuneIndex != want.start || g.RuneLength != len([]rune(want.text)) {
+							t.Fatalf("unexpected span for group %q", want.name)
+						}
+						assertByteRange(t, want.name, g, offsets[want.start], len(want.text))
+					}
+				}
+			}
+		})
 	}
 }
 
@@ -661,37 +706,46 @@ func TestFirstcharsIgnoreCase(t *testing.T) {
 }
 
 func TestRepeatingGroup(t *testing.T) {
-	re := MustCompile(`(data?)+`)
-
-	m, err := re.FindStringMatch("datadat")
-	if err != nil {
-		t.Fatalf("Unexpected err: %v", err)
+	for _, tc := range []struct {
+		pattern, input string
+		start          int
+		captures       []string
+	}{
+		{`(data?)+`, "datadat", 0, []string{"data", "dat"}},
+		{`(?<piece>aaba|aaca|bada)+!`, strings.Repeat("a", 80) + "cabada!", 78, []string{"aaca", "bada"}},
+	} {
+		t.Run(tc.pattern, func(t *testing.T) {
+			re := MustCompile(tc.pattern)
+			for _, mode := range []string{"string", "runes"} {
+				var m *Match
+				var err error
+				if mode == "string" {
+					m, err = re.FindStringMatch(tc.input)
+				} else {
+					m, err = re.FindRunesMatch([]rune(tc.input))
+				}
+				if err != nil || m == nil {
+					t.Fatalf("%s: missing match, %v", mode, err)
+				}
+				g := m.GroupByNumber(1)
+				if g == nil || len(g.Captures) != len(tc.captures) {
+					t.Fatalf("%s: unexpected captures %v", mode, g)
+				}
+				start := tc.start
+				for i, want := range tc.captures {
+					c := g.Captures[i]
+					if c.String() != want || c.RuneIndex != start || c.RuneLength != len([]rune(want)) {
+						t.Fatalf("%s: capture %d = %q at %d; want %q at %d", mode, i, c.String(), c.RuneIndex, want, start)
+					}
+					start += c.RuneLength
+				}
+				last := g.Captures[len(g.Captures)-1]
+				if g.String() != last.String() || g.RuneIndex != last.RuneIndex {
+					t.Fatal("expected last capture of the group to be embedded")
+				}
+			}
+		})
 	}
-
-	if m == nil {
-		t.Fatalf("Expected match")
-	}
-
-	g := m.GroupByNumber(1)
-	if g == nil {
-		t.Fatalf("Expected group")
-	}
-
-	if want, got := 2, len(g.Captures); want != got {
-		t.Fatalf("wanted cap count %v, got %v", want, got)
-	}
-
-	if want, got := g.Captures[1].String(), g.String(); want != got {
-		t.Fatalf("expected last capture of the group to be embedded")
-	}
-
-	if want, got := "data", g.Captures[0].String(); want != got {
-		t.Fatalf("expected cap 0 to be %v, got %v", want, got)
-	}
-	if want, got := "dat", g.Captures[1].String(); want != got {
-		t.Fatalf("expected cap 1 to be %v, got %v", want, got)
-	}
-
 }
 
 func TestFindNextMatch_Basic(t *testing.T) {
@@ -767,41 +821,324 @@ func TestFindNextMatch_ZeroWidthAfterScanAdvance(t *testing.T) {
 }
 
 func TestFindAllStringIndex(t *testing.T) {
-	re := MustCompile(`é(.)`, RE2)
-	got, err := re.FindAllStringIndex("éxéy", -1)
-	if err != nil {
-		t.Fatalf("FindAllStringIndex failed: %v", err)
+	type indexCase struct {
+		name, pattern, input string
+		options              []CompileOption
+		want                 [][2]int // rune spans; string APIs must return the corresponding byte spans
 	}
-	want := [][]int{{0, 3}, {3, 6}}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("FindAllStringIndex = %#v, want %#v", got, want)
-	}
+	cases := []indexCase{
+		{name: "unicode_captures", pattern: `é(.)`, input: "éxéy", options: []CompileOption{RE2}, want: [][2]int{{0, 2}, {2, 4}}},
 
-	got, err = re.FindAllStringIndex("éxéy", 1)
-	if err != nil {
-		t.Fatalf("FindAllStringIndex limited failed: %v", err)
-	}
-	want = [][]int{{0, 3}}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("FindAllStringIndex limited = %#v, want %#v", got, want)
-	}
+		// Case folding and near misses.
+		{name: "empty", pattern: `(?i)ab`, input: ""},
+		{name: "too_short", pattern: `(?i)ab`, input: "A"},
+		{name: "lowercase_candidates_only", pattern: `(?i)ab`, input: strings.Repeat("a", 80)},
+		{name: "uppercase_candidates_only", pattern: `(?i)ab`, input: strings.Repeat("A", 80)},
+		{name: "mixed_failed_candidates", pattern: `(?i)ab`, input: "aA-aX-Ac-aB", want: [][2]int{{9, 11}}},
+		{name: "both_cases_after_dense_misses", pattern: `(?i)ab`, input: strings.Repeat("a", 80) + "ABAAAAab", want: [][2]int{{80, 82}, {86, 88}}},
+		{name: "overlapping_candidate", pattern: `(?i)aab`, input: "AAAAb", want: [][2]int{{2, 5}}},
+		{name: "punctuation_is_not_case_folded", pattern: `(?i)\[ab\]`, input: "{AB] [aB} [Ab]", want: [][2]int{{10, 14}}},
+		{name: "unicode_before_ascii", pattern: `(?i)ab`, input: "界😀--AB!", want: [][2]int{{4, 6}}},
+		{name: "invalid_utf8_between_candidates", pattern: `(?i)ab`, input: "x\xffAB\x80ab", want: [][2]int{{2, 4}, {5, 7}}},
+		{name: "unicode_literal_fallback", pattern: `(?i)éx`, input: "Éx-éX", want: [][2]int{{0, 2}, {3, 5}}},
+		{name: "non_ascii_near_miss", pattern: `(?i)ab`, input: "aβ aЬ"},
+		{name: "scoped_case_sensitivity", pattern: `(?i:ab)C`, input: "ABc-abC", want: [][2]int{{4, 7}}},
+		{name: "lookahead_rejects_early_prefix", pattern: `(?i:ab)(?=!)`, input: "AB? ab!", want: [][2]int{{4, 6}}},
+		{name: "negative_lookahead", pattern: `(?i:ab)(?!!)`, input: "AB! ab?", want: [][2]int{{4, 6}}},
+		{name: "rtl_case_folding", pattern: `(?i)ab`, input: "AB-aa-aB", options: []CompileOption{RightToLeft}, want: [][2]int{{6, 8}, {0, 2}}},
 
-	if got, err := re.FindAllStringIndex("éxéy", 0); err != nil {
-		t.Fatalf("FindAllStringIndex n=0 failed: %v", err)
-	} else if got != nil {
-		t.Fatalf("FindAllStringIndex n=0 = %#v, want nil", got)
+		// Alternative ordering, partial candidates, and fallback cases.
+		{name: "distinct_shared_first_prefixes_miss", pattern: `aaba|aaca|bada`, input: strings.Repeat("a", 80)},
+		{name: "distinct_shared_first_prefixes_hit", pattern: `aaba|aaca|bada`, input: strings.Repeat("a", 80) + "ca", want: [][2]int{{78, 82}}},
+		{name: "later_branch_has_earlier_match", pattern: `bada|aaba|aaca`, input: strings.Repeat("a", 80) + "cabada", want: [][2]int{{78, 82}, {82, 86}}},
+		{name: "distinct_prefix_near_miss_then_hit", pattern: `(?:aaba|aaca|bada)!`, input: strings.Repeat("a", 80) + "ca?bada!", want: [][2]int{{83, 88}}},
+		{name: "distinct_prefix_missing_suffix", pattern: `(?:aaba|aaca|bada)!`, input: strings.Repeat("a", 80) + "ca"},
+		{name: "distinct_prefix_invalid_byte_boundary", pattern: `aaba|aaca|bada`, input: strings.Repeat("a", 80) + "\xffaaca", want: [][2]int{{81, 85}}},
+		{name: "distinct_prefix_unicode_boundary", pattern: `aaba|aaca|bada`, input: strings.Repeat("a", 80) + "界aaca", want: [][2]int{{81, 85}}},
+		{name: "shared_prefix_miss", pattern: `aaab|aaac|aaad`, input: strings.Repeat("a", 80)},
+		{name: "dense_last_position", pattern: `aaab|aaac|aaad`, input: strings.Repeat("a", 80) + "c", want: [][2]int{{77, 81}}},
+		{name: "earliest_not_first_branch", pattern: `aaad|aaac|aaab`, input: strings.Repeat("a", 80) + "baaac", want: [][2]int{{77, 81}, {81, 85}}},
+		{name: "overlapping_prefixes", pattern: `abab|baba|abac`, input: strings.Repeat("x", 80) + "babababac", want: [][2]int{{80, 84}, {84, 88}}},
+		{name: "later_condition_rejects_candidate", pattern: `(?:aaab|aaac|aaad)!`, input: strings.Repeat("a", 80) + "c?aaab!", want: [][2]int{{82, 87}}},
+		{name: "missing_required_suffix", pattern: `(?:aaab|aaac|aaad)!`, input: strings.Repeat("a", 80) + "c"},
+		{name: "negative_assertion_rejects_candidate", pattern: `(?:aaab|aaac|aaad)(?!X)`, input: strings.Repeat("a", 80) + "cXaaab?", want: [][2]int{{82, 86}}},
+		{name: "lookbehind_context", pattern: `(?<=!)(?:aaab|aaac|aaad)`, input: strings.Repeat("a", 80) + "c!aaad", want: [][2]int{{82, 86}}},
+		{name: "invalid_utf8_breaks_prefix", pattern: `aaab|aaac|aaad`, input: strings.Repeat("a", 80) + "\xffaaac", want: [][2]int{{81, 85}}},
+		{name: "non_ascii_breaks_prefix", pattern: `aaab|aaac|aaad`, input: strings.Repeat("a", 80) + "界aaad", want: [][2]int{{81, 85}}},
+		{name: "different_lengths_earliest", pattern: `abcdef|bc`, input: "abcdef", want: [][2]int{{0, 6}}},
+		{name: "different_lengths_branch_order", pattern: `ab|abcd`, input: "abcd", want: [][2]int{{0, 2}}},
+		{name: "long_equal_alternatives", pattern: strings.Repeat("a", 32) + "|" + strings.Repeat("b", 32), input: strings.Repeat("a", 31) + "x" + strings.Repeat("b", 32), want: [][2]int{{32, 64}}},
+		{name: "longer_equal_alternatives", pattern: strings.Repeat("a", 33) + "|" + strings.Repeat("b", 33), input: strings.Repeat("a", 32) + "x" + strings.Repeat("b", 33), want: [][2]int{{33, 66}}},
+		{name: "unicode_alternative", pattern: `aaab|界界|aaac`, input: strings.Repeat("a", 80) + "界界aaac", want: [][2]int{{80, 82}, {82, 86}}},
+		{name: "case_sensitive_alternatives", pattern: `aaab|aaac|aaad`, input: strings.Repeat("A", 80) + "AAAC"},
+		{name: "case_insensitive_alternatives", pattern: `(?i:aaab|aaac|aaad)`, input: strings.Repeat("A", 80) + "C", want: [][2]int{{77, 81}}},
+		{name: "rtl_alternatives", pattern: `aaab|aaac|aaad`, input: "aaab--aaac", options: []CompileOption{RightToLeft}, want: [][2]int{{6, 10}, {0, 4}}},
+		{name: "nul_literal", pattern: "a\x00b|a\x00c", input: "a\x00x-a\x00c", want: [][2]int{{4, 7}}},
+
+		// End anchors and final-newline candidates.
+		{name: "absolute_end", pattern: `ab\z`, input: "xxab", want: [][2]int{{2, 4}}},
+		{name: "absolute_end_rejects_final_newline", pattern: `ab\z`, input: "xxab\n"},
+		{name: "end_z_before_final_newline", pattern: `ab\Z`, input: "xxab\n", want: [][2]int{{2, 4}}},
+		{name: "crlf_requires_consuming_carriage_return", pattern: `ab$`, input: "xab\r\n"},
+		{name: "crlf_with_explicit_carriage_return", pattern: `ab\r$`, input: "xab\r\n", want: [][2]int{{1, 4}}},
+		{name: "double_newline_near_miss", pattern: `ab$`, input: "xab\n\n"},
+		{name: "consume_first_of_two_final_newlines", pattern: `ab\n$`, input: "xab\n\n", want: [][2]int{{1, 4}}},
+		{name: "first_prefix_fails_second_candidate_matches", pattern: `ab\n$`, input: "xab\n", want: [][2]int{{1, 4}}},
+		{name: "first_prefix_matches_but_following_class_fails", pattern: `aa[ \n]$`, input: "aaa\n", want: [][2]int{{1, 4}}},
+		{name: "first_prefix_matches_but_lookahead_fails", pattern: `a(?=\n)\n$`, input: "aa\n", want: [][2]int{{1, 3}}},
+		{name: "too_short_before_final_newline", pattern: `ab$`, input: "a\n"},
+		{name: "empty_input_absolute_end", pattern: `\z`, input: "", want: [][2]int{{0, 0}}},
+		{name: "variable_length_repetition", pattern: `a+b$`, input: "xaaab\n", want: [][2]int{{1, 5}}},
+		{name: "different_length_alternatives", pattern: `(?:a|bc)$`, input: "xbc\n", want: [][2]int{{1, 3}}},
+		{name: "multiline_matches_each_line", pattern: `(?m)ab$`, input: "ab\nxxab\nab", want: [][2]int{{0, 2}, {5, 7}, {8, 10}}},
+		{name: "absolute_beginning_and_end", pattern: `\Aab$`, input: "ab\n", want: [][2]int{{0, 2}}},
+		{name: "leading_anchor_rejects_later_suffix", pattern: `^ab$`, input: "xab\n"},
+		{name: "lookbehind_before_fixed_suffix", pattern: `(?<=界)ab$`, input: "x界ab\n", want: [][2]int{{2, 4}}},
+		{name: "negative_lookbehind_rejects_suffix", pattern: `(?<!x)ab$`, input: "xab\n"},
+		{name: "assertion_after_end_anchor", pattern: `ab$(?!\n)`, input: "xab\n"},
+		{name: "unicode_case_insensitive_suffix", pattern: `(?i)äb$`, input: "xÄB\n", want: [][2]int{{1, 3}}},
+		{name: "re2_requires_absolute_end", pattern: `ab$`, input: "xab\n", options: []CompileOption{RE2}},
+		{name: "ecmascript_requires_absolute_end", pattern: `ab$`, input: "xab\n", options: []CompileOption{ECMAScript}},
+		{name: "right_to_left_final_newline", pattern: `ab$`, input: "abxxab\n", options: []CompileOption{RightToLeft}, want: [][2]int{{4, 6}}},
+		{name: "right_to_left_multiline_order", pattern: `(?m)ab$`, input: "ab\nxxab\nab", options: []CompileOption{RightToLeft}, want: [][2]int{{8, 10}, {5, 7}, {0, 2}}},
+
+		// Character classes and bounded repetition.
+		{
+			name: "enumerated_minimum_hit", pattern: `[ACEGIK]{2,4}`,
+			input: "zACE!IKz", want: [][2]int{{1, 4}, {5, 7}},
+		},
+		{
+			name: "enumerated_minimum_miss", pattern: `[ACEGIK]{2,4}`,
+			input: "A!C!E!G!I!K",
+		},
+		{
+			name: "bounded_maximum_splits_run", pattern: `[ACEGIK]{2,4}`,
+			input: "ACEGIKACEG", want: [][2]int{{0, 4}, {4, 8}, {8, 10}},
+		},
+		{
+			name: "bounded_maximum_resumes_for_suffix", pattern: `[ACEGIK]{2,4}Z`,
+			input: "ACEGIKZ", want: [][2]int{{2, 7}},
+		},
+		{
+			name: "bounded_run_missing_suffix", pattern: `[ACEGIK]{2,4}Z`,
+			input: "ACEGIKY",
+		},
+		{
+			name: "set_at_fixed_distance", pattern: `..[ACEGIK]Z`,
+			input: "xxBZ!yyCZ", want: [][2]int{{5, 9}},
+		},
+		{
+			name: "fixed_distance_literal_and_set", pattern: `.x[ACEGIK]Z`,
+			input: "axBZ-bxCZ", want: [][2]int{{5, 9}},
+		},
+		{
+			name: "multiple_fixed_distance_sets", pattern: `[ACEGIK].[BDFHJL]`,
+			input: "A?Z-K!L-E_F", want: [][2]int{{4, 7}, {8, 11}},
+		},
+		{
+			name: "negated_ascii_accepts_unicode", pattern: `[^ACEGIK]{2,4}`,
+			input: "ACxyEG!界IK", want: [][2]int{{2, 4}, {6, 8}},
+		},
+		{
+			name: "negated_ascii_minimum_miss", pattern: `[^ACEGIK]{2,4}`,
+			input: "AxCEG!IK",
+		},
+		{
+			name: "unicode_enumeration", pattern: `[αβγδεζ]{2,3}`,
+			input: "xαβγδεζy", want: [][2]int{{1, 4}, {4, 7}},
+		},
+		{
+			name: "negated_unicode_accepts_ascii_and_astral", pattern: `[^αβγδεζ]{2,3}`,
+			input: "αabβ界🙂γ", want: [][2]int{{1, 3}, {4, 6}},
+		},
+		{
+			name: "mixed_ascii_unicode_enumeration", pattern: `[ACEαβγ]{2,4}`,
+			input: "xAαβE!γCy", want: [][2]int{{1, 5}, {6, 8}},
+		},
+		{
+			name: "ascii_class_subtraction", pattern: `[A-Z-[AEIOU]]{2,4}`,
+			input: "ABCDExFGHIZ", want: [][2]int{{1, 4}, {6, 9}},
+		},
+		{
+			name: "class_subtraction_minimum_miss", pattern: `[A-Z-[AEIOU]]{2,4}`,
+			input: "AEIOUBAEIOU",
+		},
+		{
+			name: "unicode_class_subtraction", pattern: `[αβγδεζηθ-[βδζθ]]{2,3}`,
+			input: "βαγεδζηαγ", want: [][2]int{{1, 4}, {6, 9}},
+		},
+		{
+			name: "ascii_ignore_case", pattern: `[ACEGIK]{2,4}`,
+			input: "xace!gIkz", options: []CompileOption{IgnoreCase},
+			want: [][2]int{{1, 4}, {5, 8}},
+		},
+		{
+			name: "unicode_ignore_case", pattern: `[ΑΒΓΔΕΖ]{2,3}`,
+			input: "xαΒγ!δεΖy", options: []CompileOption{IgnoreCase},
+			want: [][2]int{{1, 4}, {5, 8}},
+		},
+		{
+			name: "right_to_left_bounded_run", pattern: `[ACEGIK]{2,4}`,
+			input: "zACEGIKz", options: []CompileOption{RightToLeft},
+			want: [][2]int{{3, 7}, {1, 3}},
+		},
+		{
+			name: "right_to_left_fixed_distance", pattern: `A[BCDEFG]{2}Z`,
+			input: "ABCZ!ADEZ", options: []CompileOption{RightToLeft},
+			want: [][2]int{{5, 9}, {0, 4}},
+		},
+		{
+			name: "enumerated_bitmap_disabled", pattern: `[ACEGIK]{2,4}`,
+			input: "zACE!IKz", options: []CompileOption{OptionDisableCharClassASCIIBitmap()},
+			want: [][2]int{{1, 4}, {5, 7}},
+		},
+		{
+			name: "negated_bitmap_disabled", pattern: `[^ACEGIK]{2,4}`,
+			input: "ACxyEG!界IK", options: []CompileOption{OptionDisableCharClassASCIIBitmap()},
+			want: [][2]int{{2, 4}, {6, 8}},
+		},
+		{
+			name: "negated_set_accepts_newline", pattern: `[^ACEGIK]{2,3}`,
+			input: "A\n\tC12", want: [][2]int{{1, 3}, {4, 6}},
+		},
+		{
+			name: "nul_in_enumerated_set", pattern: `[\x00ACEGI]{2,3}`,
+			input: "x\x00AC!\x00G", want: [][2]int{{1, 4}, {5, 7}},
+		},
+	}
+	for _, n := range []int{0, 1, 31, 63, 64, 65, 128} {
+		for _, fill := range []string{"a", "x"} {
+			cases = append(cases, indexCase{name: fmt.Sprintf("padding_%d_%s", n, fill), pattern: `aaba|aaca|bada`, input: strings.Repeat(fill, n) + "aaca", want: [][2]int{{n, n + 4}}})
+		}
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			re, err := Compile(tc.pattern, tc.options...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runes := []rune(tc.input)
+			byteOffsets := make([]int, 0, len(runes)+1)
+			for offset := range tc.input {
+				byteOffsets = append(byteOffsets, offset)
+			}
+			byteOffsets = append(byteOffsets, len(tc.input))
+			for _, span := range tc.want {
+				if span[0] < 0 || span[0] > span[1] || span[1] > len(runes) {
+					t.Fatalf("invalid expected span %v for %q", span, tc.input)
+				}
+			}
+			for _, mode := range []string{"string", "runes"} {
+				t.Run(mode, func(t *testing.T) {
+					var matched bool
+					var err error
+					if mode == "string" {
+						matched, err = re.MatchString(tc.input)
+					} else {
+						matched, err = re.MatchRunes(runes)
+					}
+					if err != nil || matched != (len(tc.want) > 0) {
+						t.Fatalf("Match: got %v, %v; want %v", matched, err, len(tc.want) > 0)
+					}
+					for _, limit := range []int{-1, 0, 1} {
+						var got [][]int
+						if mode == "string" {
+							got, err = re.FindAllStringIndex(tc.input, limit)
+						} else {
+							got, err = re.FindAllRunesIndex(runes, limit)
+						}
+						want := tc.want
+						if limit >= 0 && limit < len(want) {
+							want = want[:limit]
+						}
+						if err != nil || len(got) != len(want) {
+							t.Fatalf("FindAllIndex limit %d: got %v, %v; want %v", limit, got, err, want)
+						}
+						if limit == 0 && got != nil {
+							t.Fatalf("FindAllIndex limit 0: got %v, want nil", got)
+						}
+						for i, span := range want {
+							if mode == "string" {
+								span = [2]int{byteOffsets[span[0]], byteOffsets[span[1]]}
+							}
+							if !slices.Equal(got[i], span[:]) {
+								t.Fatalf("FindAllIndex limit %d, match %d: got %v, want %v", limit, i, got[i], span)
+							}
+						}
+					}
+					var m *Match
+					if mode == "string" {
+						m, err = re.FindStringMatch(tc.input)
+					} else {
+						m, err = re.FindRunesMatch(runes)
+					}
+					for i, span := range tc.want {
+						if err != nil || m == nil {
+							t.Fatalf("match %d: got %v, %v; want span %v", i, m, err, span)
+						}
+						if m.RuneIndex != span[0] || m.RuneLength != span[1]-span[0] {
+							t.Fatalf("match %d: got rune span [%d,%d), want %v", i, m.RuneIndex, m.RuneIndex+m.RuneLength, span)
+						}
+						wantText := string(runes[span[0]:span[1]])
+						if mode == "string" {
+							wantText = tc.input[byteOffsets[span[0]]:byteOffsets[span[1]]]
+							start, length := m.ByteRange()
+							if start != byteOffsets[span[0]] || start+length != byteOffsets[span[1]] {
+								t.Fatalf("match %d: unexpected byte range [%d,%d)", i, start, start+length)
+							}
+						}
+						if m.String() != wantText || !slices.Equal(m.Runes(), runes[span[0]:span[1]]) {
+							t.Fatalf("match %d: got text %q, want %q", i, m.String(), wantText)
+						}
+						m, err = re.FindNextMatch(m)
+					}
+					if err != nil || m != nil {
+						t.Fatalf("unexpected additional match %v, %v", m, err)
+					}
+				})
+			}
+		})
 	}
 }
 
 func TestFindAllRunesIndex(t *testing.T) {
-	re := MustCompile(`é(.)`, RE2)
-	got, err := re.FindAllRunesIndex([]rune("éxéy"), -1)
-	if err != nil {
-		t.Fatalf("FindAllRunesIndex failed: %v", err)
-	}
-	want := [][]int{{0, 2}, {2, 4}}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("FindAllRunesIndex = %#v, want %#v", got, want)
+	for _, tc := range []struct {
+		name, pattern string
+		input         []rune
+		want          [][2]int
+	}{
+		{"unicode_captures", `é(.)`, []rune("éxéy"), [][2]int{{0, 2}, {2, 4}}},
+		{"invalid_prefix_boundary", `aaba|aaca|bada`, append(append([]rune(strings.Repeat("a", 80)), -1, 0x110000), []rune("aaca")...), [][2]int{{82, 86}}},
+		{"invalid_negated_set", `[^ACEGIK]{2}`, []rune{'A', -1, 0x110000, 'C'}, [][2]int{{1, 3}}},
+		{"invalid_casefold_boundary", `(?i)ab`, []rune{'a', -1, 'b', 0x110000, 'A', 'B'}, [][2]int{{4, 6}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			re := MustCompile(tc.pattern)
+			matched, err := re.MatchRunes(tc.input)
+			if err != nil || matched != (len(tc.want) > 0) {
+				t.Fatalf("MatchRunes = %v, %v", matched, err)
+			}
+			got, err := re.FindAllRunesIndex(tc.input, -1)
+			if err != nil || len(got) != len(tc.want) {
+				t.Fatalf("FindAllRunesIndex = %v, %v; want %v", got, err, tc.want)
+			}
+			m, err := re.FindRunesMatch(tc.input)
+			for i, span := range tc.want {
+				if !slices.Equal(got[i], span[:]) {
+					t.Fatalf("index %d = %v; want %v", i, got[i], span)
+				}
+				if err != nil || m == nil {
+					t.Fatalf("missing match %d: %v", i, err)
+				}
+				if m.RuneIndex != span[0] || m.RuneLength != span[1]-span[0] || !slices.Equal(m.Runes(), tc.input[span[0]:span[1]]) {
+					t.Fatalf("unexpected match %d: %v", i, m)
+				}
+				m, err = re.FindNextMatch(m)
+			}
+			if err != nil || m != nil {
+				t.Fatalf("unexpected additional match %v, %v", m, err)
+			}
+		})
 	}
 }
 
